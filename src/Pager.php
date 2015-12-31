@@ -104,6 +104,12 @@ class Pager
     private $background = array();
 
     /**
+     * the paragraph margins
+     * @var null|array
+     */
+    private $paragraph = null;
+
+    /**
      * @var CssConverter
      */
     private $cssConverter;
@@ -146,6 +152,115 @@ class Pager
     }
 
     /**
+     * get the orientation
+     *
+     * @return string
+     */
+    public function getOrientation()
+    {
+        return $this->orientation;
+    }
+
+    /**
+     * get the format
+     *
+     * @return string
+     */
+    public function getFormat()
+    {
+        return $this->format;
+    }
+
+    /**
+     * is it the first page ?
+     *
+     * @return bool
+     */
+    public function isFirstPage()
+    {
+        return $this->firstPage;
+    }
+
+    /**
+     * set the current page number
+     *
+     * @param int $page
+     *
+     * @return void
+     */
+    public function setCurrentPage($page)
+    {
+        $this->page = $page;
+    }
+
+    /**
+     * get the current page number
+     *
+     * @return int
+     */
+    public function getCurrentPage()
+    {
+        return $this->page;
+    }
+
+    /**
+     * get the marge left
+     *
+     * @return float
+     */
+    public function getMargeLeft()
+    {
+        return $this->margeLeft;
+    }
+
+    /**
+     * get the marge top
+     *
+     * @return float
+     */
+    public function getMargeTop()
+    {
+        return $this->margeTop;
+    }
+
+    /**
+     * get the marge right
+     *
+     * @return float
+     */
+    public function getMargeRight()
+    {
+        return $this->margeRight;
+    }
+
+    /**
+     * get the marge bottom
+     *
+     * @return float
+     */
+    public function getMargeBottom()
+    {
+        return $this->margeBottom;
+    }
+    /**
+     * set the paragraph margins
+     *
+     * @param float|null $left
+     * @param float|null $right
+     *
+     * @return void
+     */
+    public function setParagraphMargins($left = null, $right = null)
+    {
+        if (is_null($left) || is_null($right)) {
+            $this->paragraph = null;
+        } else {
+            $this->paragraph = array($left, $right);
+        }
+
+    }
+
+    /**
      * set the default margins of the page
      *
      * @param array|int $margins (mm, left top right bottom)
@@ -172,6 +287,21 @@ class Pager
     }
 
     /**
+     * get the default margins
+     *
+     * @return array
+     */
+    public function getDefaultMargins()
+    {
+        return array(
+            $this->defaultLeft,
+            $this->defaultTop,
+            $this->defaultRight,
+            $this->defaultBottom
+        );
+    }
+
+    /**
      * get the key for the float marge array
      *
      * @param float $y
@@ -184,13 +314,23 @@ class Pager
     }
 
     /**
-     * set the real margin, using the default margins and the page margins
+     * set the background info
      *
-     * @param array $paragraph
+     * @param array|null $background
      *
      * @return void
      */
-    public function setMargins($paragraph = null)
+    public function setBackground($background)
+    {
+        $this->background = $background;
+    }
+
+    /**
+     * set the real margin, using the default margins and the page margins
+     *
+     * @return void
+     */
+    public function setMargins()
     {
         // read background marge
         $backgroundLeft   = (isset($this->background['left'])   ? $this->background['left']   : 0);
@@ -211,8 +351,8 @@ class Pager
         // set the float Margins
         $this->pageMarges = array();
 
-        if (is_array($paragraph)) {
-            $this->addMargin($this->margeTop, $paragraph[0], $this->pdf->getW()-$paragraph[1]);
+        if (is_array($this->paragraph)) {
+            $this->addMargin($this->margeTop, $this->paragraph[0], $this->pdf->getW()-$this->paragraph[1]);
         } else {
             $this->addMargin($this->margeTop, $this->margeLeft, $this->pdf->getW()-$this->margeRight);
         }
@@ -409,10 +549,114 @@ class Pager
      */
     public function resetCurrentMarge()
     {
-        $this->margeLeft   = $this->defaultLeft;
-        $this->margeRight  = $this->defaultRight;
-        $this->margeTop    = $this->defaultTop;
+        $this->margeLeft = $this->defaultLeft;
+        $this->margeRight = $this->defaultRight;
+        $this->margeTop = $this->defaultTop;
         $this->margeBottom = $this->defaultBottom;
-        $this->pageMarges  = array();
+        $this->pageMarges = array();
+    }
+
+
+    /**
+     * create a new page
+     *
+     * @param mixed   $format
+     * @param string  $orientation
+     * @param array   $background background information
+     * @param boolean $resetPageNumber
+     * @param boolean $realPage
+     *
+     * @return void
+     */
+    public function addNewPage(
+        $format = null,
+        $orientation = null,
+        $background = null,
+        $resetPageNumber = false,
+        $realPage = true
+    ) {
+        $this->firstPage = false;
+
+        if (!is_null($format)) {
+            $this->format = $format;
+        }
+
+        if (!is_null($orientation)) {
+            $this->orientation = $orientation;
+        }
+
+        if (!is_null($background)) {
+            $this->background = $format;
+        }
+
+        $this->pdf->SetMargins($this->defaultLeft, $this->defaultTop, $this->defaultRight);
+
+        if ($resetPageNumber) {
+            $this->pdf->startPageGroup();
+        }
+
+        $this->pdf->AddPage($this->orientation, $this->format);
+
+        if ($resetPageNumber) {
+            $this->pdf->myStartPageGroup();
+        }
+
+        $this->page++;
+
+        if ($realPage) {
+            $this->drawBackground();
+            $this->drawPageHeader();
+            $this->drawPageFooter();
+        }
+
+        $this->setMargins();
+        $this->pdf->setY($this->margeTop);
+    }
+
+    /**
+     * draw the background
+     *
+     * @return bool
+     */
+    protected function drawBackground()
+    {
+        if (!is_array($this->background)) {
+            return false;
+        }
+
+        if (isset($this->background['color']) && $this->background['color']) {
+            $this->pdf->setFillColorArray($this->background['color']);
+            $this->pdf->Rect(0, 0, $this->pdf->getW(), $this->pdf->getH(), 'F');
+        }
+
+        if (isset($this->background['img']) && $this->background['img']) {
+            $this->pdf->Image(
+                $this->background['img'],
+                $this->background['posX'],
+                $this->background['posY'],
+                $this->background['width']
+            );
+        }
+
+        return true;
+    }
+    /**
+     * draw the page header
+     *
+     * @return bool
+     */
+    protected function drawPageHeader()
+    {
+        return true;
+    }
+
+    /**
+     * draw the page footer
+     *
+     * @return bool
+     */
+    protected function drawPageFooter()
+    {
+        return true;
     }
 }
