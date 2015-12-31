@@ -64,6 +64,11 @@ class Html2Pdf
      */
     private $cssConverter;
 
+    /**
+     * @var Pager
+     */
+    private $pager;
+
     protected $_langue           = 'fr';        // locale of the messages
     protected $_orientation      = 'P';         // page orientation : Portrait ou Landscape
     protected $_format           = 'A4';        // page format : A4, A3, ...
@@ -75,7 +80,6 @@ class Html2Pdf
 
     protected $_parsePos         = 0;           // position in the parsing
     protected $_tempPos          = 0;           // temporary position for complex table
-    protected $_page             = 0;           // current page number
 
     protected $_subHtml          = null;        // sub html
     protected $_subPart          = false;       // sub Html2Pdf
@@ -101,23 +105,10 @@ class Html2Pdf
     protected $_maxH             = 0;           // maximum height of the line in the current zone
     protected $_maxSave          = array();     // save the maximums of the current zone
     protected $_currentH         = 0;           // height of the current line
-
-    protected $_defaultLeft      = 0;           // default marges of the page
-    protected $_defaultTop       = 0;
-    protected $_defaultRight     = 0;
-    protected $_defaultBottom    = 0;
     protected $_defaultFont      = null;        // default font to use, is the asked font does not exist
 
-    protected $_margeLeft        = 0;           // current marges of the page
-    protected $_margeTop         = 0;
-    protected $_margeRight       = 0;
-    protected $_margeBottom      = 0;
-    protected $_marges           = array();     // save the different marges of the current page
-    protected $_pageMarges       = array();     // float marges of the current page
-    protected $_background       = array();     // background informations
 
     protected $_hideHeader       = array();     // array : list of pages which the header gonna be hidden
-    protected $_firstPage        = true;        // flag : first page
     protected $_defList          = array();     // table to save the stats of the tags UL and OL
 
     protected $_lstAnchor        = array();     // list of the anchors
@@ -162,13 +153,7 @@ class Html2Pdf
      */
     public function __construct($orientation = 'P', $format = 'A4', $lang = 'fr', $unicode = true, $encoding = 'UTF-8', $margins = array(5, 5, 5, 8))
     {
-        // init the page number
-        $this->_page         = 0;
-        $this->_firstPage    = true;
-
         // save the parameters
-        $this->_orientation  = $orientation;
-        $this->_format       = $format;
         $this->_langue       = strtolower($lang);
         $this->_unicode      = $unicode;
         $this->_encoding     = $encoding;
@@ -176,15 +161,36 @@ class Html2Pdf
         // load the Locale
         Locale::load($this->_langue);
 
+        // init the css converter
+        $this->cssConverter = new CssConverter();
+
         // create the  myPdf object
         $this->pdf = new MyPdf($orientation, 'mm', $format, $unicode, $encoding);
 
+        // init the pager
+        $this->pager = new Pager($this->cssConverter, $this->pdf);
+        $this->pager->init($orientation, $format);
+        $this->pager->setDefaultMargins($margins);
+        $this->pager->setMargins($this->_isInParagraph);
+
         // init the CSS parsing object
-        $this->cssConverter = new CssConverter();
         $textParser = new TextParser($encoding);
         $this->parsingCss = new Parsing\Css($this->pdf, new TagParser($textParser), $this->cssConverter);
         $this->parsingCss->fontSet();
         $this->_defList = array();
+
+        // init the html lexer
+        $this->lexer = new HtmlLexer();
+        
+        // init the HTML parsing object
+        $this->parsingHtml = new Parsing\Html($textParser);
+        $this->_subHtml = null;
+        $this->_subPart = false;
+
+        // init the form's fields
+        $this->_lstField = array();
+
+        $this->addExtension(new CoreExtension());
 
         // init some tests
         $this->setTestTdInOnePage(true);
@@ -192,21 +198,6 @@ class Html2Pdf
 
         // init the default font
         $this->setDefaultFont(null);
-
-        $this->lexer = new HtmlLexer();
-        // init the HTML parsing object
-        $this->parsingHtml = new Parsing\Html($textParser);
-        $this->_subHtml = null;
-        $this->_subPart = false;
-
-        $this->setDefaultMargins($margins);
-        $this->setMargins();
-        $this->_marges = array();
-
-        // init the form's fields
-        $this->_lstField = array();
-
-        $this->addExtension(new CoreExtension());
 
         return $this;
     }
@@ -573,30 +564,6 @@ class Html2Pdf
     }
 
     /**
-     * set the default margins of the page
-     *
-     * @param array|int $margins (mm, left top right bottom)
-     */
-    protected function setDefaultMargins($margins)
-    {
-        if (!is_array($margins)) {
-            $margins = array($margins, $margins, $margins, $margins);
-        }
-
-        if (!isset($margins[2])) {
-            $margins[2] = $margins[0];
-        }
-        if (!isset($margins[3])) {
-            $margins[3] = 8;
-        }
-
-        $this->_defaultLeft   = $this->cssConverter->ConvertToMM($margins[0].'mm');
-        $this->_defaultTop    = $this->cssConverter->ConvertToMM($margins[1].'mm');
-        $this->_defaultRight  = $this->cssConverter->ConvertToMM($margins[2].'mm');
-        $this->_defaultBottom = $this->cssConverter->ConvertToMM($margins[3].'mm');
-    }
-
-    /**
      * create a new page
      *
      * @access protected
@@ -648,157 +615,13 @@ class Html2Pdf
             $this->_setPageFooter();
         }
 
-        $this->setMargins();
+        $this->pager->setMargins($this->_isInParagraph);
         $this->pdf->setY($this->_margeTop);
 
         $this->_setNewPositionForNewLine($curr);
         $this->_maxH = 0;
     }
 
-    /**
-     * set the real margin, using the default margins and the page margins
-     */
-    protected function setMargins()
-    {
-        // prepare the margins
-        $this->_margeLeft   = $this->_defaultLeft   + (isset($this->_background['left'])   ? $this->_background['left']   : 0);
-        $this->_margeRight  = $this->_defaultRight  + (isset($this->_background['right'])  ? $this->_background['right']  : 0);
-        $this->_margeTop    = $this->_defaultTop    + (isset($this->_background['top'])    ? $this->_background['top']    : 0);
-        $this->_margeBottom = $this->_defaultBottom + (isset($this->_background['bottom']) ? $this->_background['bottom'] : 0);
-
-        // set the PDF margins
-        $this->pdf->SetMargins($this->_margeLeft, $this->_margeTop, $this->_margeRight);
-        $this->pdf->SetAutoPageBreak(false, $this->_margeBottom);
-
-        // set the float Margins
-        $this->_pageMarges = array();
-        if ($this->_isInParagraph!==false) {
-            $this->_pageMarges[floor($this->_margeTop*100)] = array($this->_isInParagraph[0], $this->pdf->getW()-$this->_isInParagraph[1]);
-        } else {
-            $this->_pageMarges[floor($this->_margeTop*100)] = array($this->_margeLeft, $this->pdf->getW()-$this->_margeRight);
-        }
-    }
-
-
-    /**
-     * get the Min and Max X, for Y (use the float margins)
-     *
-     * @access protected
-     * @param  float $y
-     * @return array(float, float)
-     */
-    protected function _getMargins($y)
-    {
-        $y = floor($y*100);
-        $x = array($this->pdf->getlMargin(), $this->pdf->getW()-$this->pdf->getrMargin());
-
-        foreach ($this->_pageMarges as $mY => $mX) {
-            if ($mY<=$y) {
-                $x = $mX;
-            }
-        }
-
-        return $x;
-    }
-
-    /**
-     * Add margins, for a float
-     *
-     * @access protected
-     * @param  string $float (left / right)
-     * @param  float  $xLeft
-     * @param  float  $yTop
-     * @param  float  $xRight
-     * @param  float  $yBottom
-     */
-    protected function _addMargins($float, $xLeft, $yTop, $xRight, $yBottom)
-    {
-        // get the current float margins, for top and bottom
-        $oldTop    = $this->_getMargins($yTop);
-        $oldBottom = $this->_getMargins($yBottom);
-
-        // update the top float margin
-        if ($float=='left'  && $oldTop[0]<$xRight) {
-            $oldTop[0] = $xRight;
-        }
-        if ($float=='right' && $oldTop[1]>$xLeft) {
-            $oldTop[1] = $xLeft;
-        }
-
-        $yTop = floor($yTop*100);
-        $yBottom = floor($yBottom*100);
-
-        // erase all the float margins that are smaller than the new one
-        foreach ($this->_pageMarges as $mY => $mX) {
-            if ($mY<$yTop) {
-                continue;
-            }
-            if ($mY>$yBottom) {
-                break;
-            }
-            if ($float=='left' && $this->_pageMarges[$mY][0]<$xRight) {
-                unset($this->_pageMarges[$mY]);
-            }
-            if ($float=='right' && $this->_pageMarges[$mY][1]>$xLeft) {
-                unset($this->_pageMarges[$mY]);
-            }
-        }
-
-        // save the new Top and Bottom margins
-        $this->_pageMarges[$yTop] = $oldTop;
-        $this->_pageMarges[$yBottom] = $oldBottom;
-
-        // sort the margins
-        ksort($this->_pageMarges);
-
-        // we are just after float
-        $this->_isAfterFloat = true;
-    }
-
-    /**
-     * Save old margins (push), and set new ones
-     *
-     * @access protected
-     * @param  float  $ml left margin
-     * @param  float  $mt top margin
-     * @param  float  $mr right margin
-     */
-    protected function _saveMargin($ml, $mt, $mr)
-    {
-        // save old margins
-        $this->_marges[] = array('l' => $this->pdf->getlMargin(), 't' => $this->pdf->gettMargin(), 'r' => $this->pdf->getrMargin(), 'page' => $this->_pageMarges);
-
-        // set new ones
-        $this->pdf->SetMargins($ml, $mt, $mr);
-
-        // prepare for float margins
-        $this->_pageMarges = array();
-        $this->_pageMarges[floor($mt*100)] = array($ml, $this->pdf->getW()-$mr);
-    }
-
-    /**
-     * load the last saved margins (pop)
-     *
-     * @access protected
-     */
-    protected function _loadMargin()
-    {
-        $old = array_pop($this->_marges);
-        if ($old) {
-            $ml = $old['l'];
-            $mt = $old['t'];
-            $mr = $old['r'];
-            $mP = $old['page'];
-        } else {
-            $ml = $this->_margeLeft;
-            $mt = 0;
-            $mr = $this->_margeRight;
-            $mP = array($mt => array($ml, $this->pdf->getW()-$mr));
-        }
-
-        $this->pdf->SetMargins($ml, $mt, $mr);
-        $this->_pageMarges = $mP;
-    }
 
     /**
      * save the current maxs (push)
@@ -904,7 +727,7 @@ class Html2Pdf
     protected function _setNewPositionForNewLine($curr = null)
     {
         // get the margins for the current line
-        list($lx, $rx) = $this->_getMargins($this->pdf->getY());
+        list($lx, $rx) = $this->pager->getMargins($this->pdf->getY());
         $this->pdf->setX($lx);
         $wMax = $rx-$lx;
         $this->_currentH = 0;
@@ -1476,7 +1299,7 @@ class Html2Pdf
 
         // if we are in a gloat => adapt the parent position and width
         if ($float) {
-            list($lx, $rx) = $this->_getMargins($yc);
+            list($lx, $rx) = $this->pager->getMargins($yc);
             $parentX = $lx;
             $parentWidth = $rx-$lx;
         }
@@ -1511,20 +1334,22 @@ class Html2Pdf
             $this->_maxY = max($this->_maxY, $y+$h);
 
             // add the image to the margins
-            $this->_addMargins($float, $x, $y, $x+$w, $y+$h);
+            $this->pager->addBoxMargins($float, $x, $y, $x+$w, $y+$h);
+            $this->_isAfterFloat;
 
             // get the new position
-            list($lx, $rx) = $this->_getMargins($yc);
+            list($lx, $rx) = $this->pager->getMargins($yc);
             $this->pdf->setXY($lx, $yc);
         } elseif ($float=='right') {
             // save the current max. We don't save the X because it is not the real max of the line
             $this->_maxY = max($this->_maxY, $y+$h);
 
             // add the image to the margins
-            $this->_addMargins($float, $x, $y, $x+$w, $y+$h);
+            $this->pager->addBoxMargins($float, $x, $y, $x+$w, $y+$h);
+            $this->_isAfterFloat;
 
             // get the new position
-            list($lx, $rx) = $this->_getMargins($yc);
+            list($lx, $rx) = $this->pager->getMargins($yc);
             $this->pdf->setXY($lx, $yc);
         } else {
             // set the new position at the end of the image
@@ -2864,18 +2689,10 @@ class Html2Pdf
         $this->_subSTATES['y']  = $this->pdf->getY();
         $this->_subSTATES['s']  = $this->parsingCss->value;
         $this->_subSTATES['t']  = $this->parsingCss->table;
-        $this->_subSTATES['ml'] = $this->_margeLeft;
-        $this->_subSTATES['mr'] = $this->_margeRight;
-        $this->_subSTATES['mt'] = $this->_margeTop;
-        $this->_subSTATES['mb'] = $this->_margeBottom;
-        $this->_subSTATES['mp'] = $this->_pageMarges;
+        $this->_subSTATES['pager'] = $this->pager->getCurrentMarge();
 
         // new stat for the header
-        $this->_pageMarges = array();
-        $this->_margeLeft    = $this->_defaultLeft;
-        $this->_margeRight   = $this->_defaultRight;
-        $this->_margeTop     = $this->_defaultTop;
-        $this->_margeBottom  = $this->_defaultBottom;
+        $this->pager->resetCurrentMarge();
         $this->pdf->SetMargins($this->_margeLeft, $this->_margeTop, $this->_margeRight);
         $this->pdf->SetAutoPageBreak(false, $this->_margeBottom);
         $this->pdf->setXY($this->_defaultLeft, $this->_defaultTop);
@@ -2910,11 +2727,7 @@ class Html2Pdf
         // restore the stat
         $this->parsingCss->value = $this->_subSTATES['s'];
         $this->parsingCss->table = $this->_subSTATES['t'];
-        $this->_pageMarges       = $this->_subSTATES['mp'];
-        $this->_margeLeft        = $this->_subSTATES['ml'];
-        $this->_margeRight       = $this->_subSTATES['mr'];
-        $this->_margeTop         = $this->_subSTATES['mt'];
-        $this->_margeBottom      = $this->_subSTATES['mb'];
+        $this->pager->setCurrentMarge($this->_subSTATES['pager']);
         $this->pdf->SetMargins($this->_margeLeft, $this->_margeTop, $this->_margeRight);
         $this->pdf->setbMargin($this->_margeBottom);
         $this->pdf->SetAutoPageBreak(false, $this->_margeBottom);
@@ -2944,18 +2757,10 @@ class Html2Pdf
         $this->_subSTATES['y']    = $this->pdf->getY();
         $this->_subSTATES['s']    = $this->parsingCss->value;
         $this->_subSTATES['t']    = $this->parsingCss->table;
-        $this->_subSTATES['ml']    = $this->_margeLeft;
-        $this->_subSTATES['mr']    = $this->_margeRight;
-        $this->_subSTATES['mt']    = $this->_margeTop;
-        $this->_subSTATES['mb']    = $this->_margeBottom;
-        $this->_subSTATES['mp']    = $this->_pageMarges;
+        $this->_subSTATES['pager'] = $this->pager->getCurrentMarge();
 
         // new stat for the footer
-        $this->_pageMarges  = array();
-        $this->_margeLeft   = $this->_defaultLeft;
-        $this->_margeRight  = $this->_defaultRight;
-        $this->_margeTop    = $this->_defaultTop;
-        $this->_margeBottom = $this->_defaultBottom;
+        $this->pager->resetCurrentMarge();
         $this->pdf->SetMargins($this->_margeLeft, $this->_margeTop, $this->_margeRight);
         $this->pdf->SetAutoPageBreak(false, $this->_margeBottom);
         $this->pdf->setXY($this->_defaultLeft, $this->_defaultTop);
@@ -2997,11 +2802,7 @@ class Html2Pdf
 
         $this->parsingCss->value                = $this->_subSTATES['s'];
         $this->parsingCss->table                = $this->_subSTATES['t'];
-        $this->_pageMarges                 = $this->_subSTATES['mp'];
-        $this->_margeLeft                = $this->_subSTATES['ml'];
-        $this->_margeRight                = $this->_subSTATES['mr'];
-        $this->_margeTop                    = $this->_subSTATES['mt'];
-        $this->_margeBottom                = $this->_subSTATES['mb'];
+        $this->pager->setCurrentMarge($this->_subSTATES['pager']);
         $this->pdf->SetMargins($this->_margeLeft, $this->_margeTop, $this->_margeRight);
         $this->pdf->SetAutoPageBreak(false, $this->_margeBottom);
         $this->pdf->setXY($this->_subSTATES['x'], $this->_subSTATES['y']);
@@ -3759,7 +3560,7 @@ class Html2Pdf
         $dy = $this->_getElementY($lh);
 
         // margins
-        list($left, $right) = $this->_getMargins($y);
+        list($left, $right) = $this->pager->getMargins($y);
 
         // number of lines after automatic break line
         $nb = 0;
@@ -3869,7 +3670,7 @@ class Html2Pdf
                 }
 
                 // new margins for the new line
-                list($left, $right) = $this->_getMargins($y);
+                list($left, $right) = $this->pager->getMargins($y);
             }
         }
 
@@ -4251,7 +4052,7 @@ class Html2Pdf
          // cancel the effects of the setPosition
         $this->pdf->setXY($this->pdf->getX()-$this->parsingCss->value['margin']['l'], $this->pdf->getY()-$this->parsingCss->value['margin']['t']);
 
-        list($mL, $mR) = $this->_getMargins($this->pdf->getY());
+        list($mL, $mR) = $this->pager->getMargins($this->pdf->getY());
         $mR = $this->pdf->getW()-$mR;
         $mL+= $this->parsingCss->value['margin']['l']+$this->parsingCss->value['padding']['l'];
         $mR+= $this->parsingCss->value['margin']['r']+$this->parsingCss->value['padding']['r'];
@@ -4259,9 +4060,10 @@ class Html2Pdf
 
         if ($this->parsingCss->value['text-indent']>0) {
             $y = $this->pdf->getY()+$this->parsingCss->value['margin']['t']+$this->parsingCss->value['padding']['t'];
-            $this->_pageMarges[floor($y*100)] = array($mL+$this->parsingCss->value['text-indent'], $this->pdf->getW()-$mR);
+            $this->pager->addMargin($y, $mL+$this->parsingCss->value['text-indent'], $this->pdf->getW()-$mR);
+
             $y+= $this->parsingCss->getLineHeight()*0.1;
-            $this->_pageMarges[floor($y*100)] = array($mL, $this->pdf->getW()-$mR);
+            $this->pager->addMargin($y, $mL, $this->pdf->getW()-$mR);
         }
         $this->_makeBreakLine($this->parsingCss->value['margin']['t']+$this->parsingCss->value['padding']['t']);
         $this->_isInParagraph = array($mL, $mR);
