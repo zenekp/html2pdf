@@ -1591,10 +1591,10 @@ class HTML2PDF
             $inBL[1]-= $border['b']['width'];
         }
 
-        if ($inTL[0]<=0 || $inTL[1]<=0) $inTL = null;
-        if ($inTR[0]<=0 || $inTR[1]<=0) $inTR = null;
-        if ($inBR[0]<=0 || $inBR[1]<=0) $inBR = null;
-        if ($inBL[0]<=0 || $inBL[1]<=0) $inBL = null;
+        if ($inTL !== null && ($inTL[0]<=0 || $inTL[1]<=0)) $inTL = null;
+        if ($inTR !== null && ($inTR[0]<=0 || $inTR[1]<=0)) $inTR = null;
+        if ($inBR !== null && ($inBR[0]<=0 || $inBR[1]<=0)) $inBR = null;
+        if ($inBL !== null && ($inBL[0]<=0 || $inBL[1]<=0)) $inBL = null;
 
         // prepare the background color
         $pdfStyle = '';
